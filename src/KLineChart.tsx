@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { init, dispose, registerIndicator } from 'klinecharts'
 import type { Chart, KLineData } from 'klinecharts'
 import customColoredCandles from './customColoredCandles'
+import { fetchIndicator } from './api'
 import { fetchOHLC, fetchSMVolume, fetchPEI, fetchTrendControl } from './mockData'
 import type { LayoutItem, IndicatorResponse } from './dynamicIndicators'
 import { createDynamicIndicatorTemplate } from './dynamicIndicators'
@@ -16,18 +17,31 @@ export default function KLineChart() {
     const chartRef = useRef<Chart | null>(null)
     const addedIndicatorsRef = useRef<{ paneId: string, name: string }[]>([])
     const [status, setStatus] = useState<Status>('loading')
-    const [candleCount, setCandleCount] = useState(120)
+    const [ticker, setTicker] = useState('VLID3')
+    const [periodDays, setPeriodDays] = useState(365)
+    const [interval, setInterval] = useState('1d')
+    const [useMock, setUseMock] = useState(false)
     const [lastUpdated, setLastUpdated] = useState<string>('')
     const [activeIndicators, setActiveIndicators] = useState<string[]>(['SM_Volume', 'PEI', 'Trend_Control'])
 
-    const loadData = async (chart: Chart, count: number, active: string[]) => {
+    const loadData = async (chart: Chart, active: string[], currentTicker: string, currentPeriod: number, currentInterval: string, isMock: boolean) => {
         setStatus('loading')
         try {
             // 1. Fetch decoupled APIs in parallel logically
-            const promises: Promise<IndicatorResponse>[] = [fetchOHLC(count)]
-            if (active.includes('SM_Volume')) promises.push(fetchSMVolume(count))
-            if (active.includes('PEI')) promises.push(fetchPEI(count))
-            if (active.includes('Trend_Control')) promises.push(fetchTrendControl(count))
+            const promises: Promise<IndicatorResponse>[] = []
+
+            if (isMock) {
+                // mockData functions take a 'count' which we reuse as periodDays logic for the mock chart size
+                promises.push(fetchOHLC(currentPeriod))
+                if (active.includes('SM_Volume')) promises.push(fetchSMVolume(currentPeriod))
+                if (active.includes('PEI')) promises.push(fetchPEI(currentPeriod))
+                if (active.includes('Trend_Control')) promises.push(fetchTrendControl(currentPeriod))
+            } else {
+                promises.push(fetchIndicator('ohlc', currentTicker, currentPeriod, currentInterval))
+                if (active.includes('SM_Volume')) promises.push(fetchIndicator('sm_volume', currentTicker, currentPeriod, currentInterval))
+                if (active.includes('PEI')) promises.push(fetchIndicator('pei', currentTicker, currentPeriod, currentInterval))
+                if (active.includes('Trend_Control')) promises.push(fetchIndicator('trend_control', currentTicker, currentPeriod, currentInterval))
+            }
 
             const responses = await Promise.all(promises)
 
@@ -174,7 +188,7 @@ export default function KLineChart() {
         if (!chart) return
         chartRef.current = chart
 
-        loadData(chart, 120, ['SM_Volume', 'PEI', 'Trend_Control'])
+        loadData(chart, activeIndicators, ticker, periodDays, interval, useMock)
 
         const handleResize = () => chart.resize()
         window.addEventListener('resize', handleResize)
@@ -186,62 +200,104 @@ export default function KLineChart() {
             if (currentContainer) dispose(currentContainer)
             chartRef.current = null
         }
-
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
+    // Remove dependency array variables to fix stale closure over local states
+    // but the actual React pattern is safely mapping the inputs on event triggers
     const handleRefresh = () => {
-        if (chartRef.current) loadData(chartRef.current, candleCount, activeIndicators)
-    }
-
-    const handleCountChange = (count: number) => {
-        setCandleCount(count)
-        if (chartRef.current) loadData(chartRef.current, count, activeIndicators)
+        if (chartRef.current) loadData(chartRef.current, activeIndicators, ticker, periodDays, interval, useMock)
     }
 
     const toggleIndicator = (id: string, checked: boolean) => {
         const next = checked ? [...activeIndicators, id] : activeIndicators.filter(x => x !== id)
         setActiveIndicators(next)
-        if (chartRef.current) loadData(chartRef.current, candleCount, next)
+        if (chartRef.current) loadData(chartRef.current, next, ticker, periodDays, interval, useMock)
+    }
+
+    const handleApplyFilters = () => {
+        if (chartRef.current) loadData(chartRef.current, activeIndicators, ticker, periodDays, interval, useMock)
+    }
+
+    const toggleMock = (checked: boolean) => {
+        setUseMock(checked)
+        if (chartRef.current) loadData(chartRef.current, activeIndicators, ticker, periodDays, interval, checked)
     }
 
     return (
         <div className="chart-wrapper">
             {/* Toolbar */}
-            <div className="chart-toolbar">
-                <div className="toolbar-left">
-                    <span className="asset-label">
+            <div className="chart-toolbar" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div className="toolbar-left" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                         <span className={`asset-dot ${status === 'loading' ? 'loading' : ''}`} />
-                        BTC/USDT
-                    </span>
-                    <span className="timeframe">1m</span>
-                    {lastUpdated && (
-                        <span className="last-updated">Updated {lastUpdated}</span>
-                    )}
-                </div>
-
-                <div className="toolbar-indicators" style={{ display: 'flex', gap: '15px', alignItems: 'center', marginLeft: '20px' }}>
-                    {[{ id: 'SM_Volume', label: 'SM Volume' }, { id: 'PEI', label: 'PEI' }, { id: 'Trend_Control', label: 'Trend Control' }].map(ind => (
-                        <label key={ind.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#fff', fontSize: '13px', cursor: 'pointer' }}>
+                        <input
+                            type="text"
+                            value={ticker}
+                            onChange={(e) => setTicker(e.target.value.toUpperCase())}
+                            style={{ background: '#1e1e2e', border: '1px solid #333', color: '#fff', padding: '4px 8px', borderRadius: '4px', width: '80px', textTransform: 'uppercase' }}
+                            placeholder="Ticker"
+                        />
+                        {lastUpdated && (
+                            <span className="last-updated" style={{ fontSize: '11px' }}>Updated {lastUpdated}</span>
+                        )}
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#fff', fontSize: '12px', cursor: 'pointer', marginLeft: '10px' }}>
                             <input
                                 type="checkbox"
-                                checked={activeIndicators.includes(ind.id)}
-                                onChange={(e) => toggleIndicator(ind.id, e.target.checked)}
+                                checked={useMock}
+                                onChange={(e) => toggleMock(e.target.checked)}
                             />
-                            {ind.label}
+                            Use Mock
                         </label>
-                    ))}
-                </div>
+                    </div>
 
-                <div className="toolbar-right">
-                    {[60, 120, 200].map(n => (
-                        <button
-                            key={n}
-                            className={`count-btn ${candleCount === n ? 'active' : ''}`}
-                            onClick={() => handleCountChange(n)}
-                        >
-                            {n}
-                        </button>
-                    ))}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <label style={{ fontSize: '12px', color: '#aaa' }}>Period (days): {periodDays}</label>
+                        <input
+                            type="range"
+                            min="1"
+                            max="730"
+                            value={periodDays}
+                            onChange={(e) => setPeriodDays(parseInt(e.target.value))}
+                        />
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '5px' }}>
+                        {['30min', '1d', '5d', '7d', '30d', '6m', '1a', '5a'].map(inv => (
+                            <button
+                                key={inv}
+                                onClick={() => setInterval(inv)}
+                                style={{
+                                    background: interval === inv ? '#2979FF' : '#2A2A35',
+                                    border: 'none',
+                                    color: '#fff',
+                                    padding: '4px 8px',
+                                    borderRadius: '4px',
+                                    fontSize: '11px',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                {inv}
+                            </button>
+                        ))}
+                    </div>
+
+                    <button
+                        onClick={handleApplyFilters}
+                        style={{
+                            background: '#00E676',
+                            border: 'none',
+                            color: '#000',
+                            fontWeight: 'bold',
+                            padding: '4px 12px',
+                            borderRadius: '4px',
+                            fontSize: '12px',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        Load
+                    </button>
+
                     <button
                         className="refresh-btn"
                         onClick={handleRefresh}
@@ -257,6 +313,19 @@ export default function KLineChart() {
                         )}
                         Refresh
                     </button>
+                </div>
+
+                <div className="toolbar-indicators" style={{ display: 'flex', gap: '15px', alignItems: 'center', paddingBottom: '5px' }}>
+                    {[{ id: 'SM_Volume', label: 'SM Volume' }, { id: 'PEI', label: 'PEI' }, { id: 'Trend_Control', label: 'Trend Control' }].map(ind => (
+                        <label key={ind.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#fff', fontSize: '13px', cursor: 'pointer' }}>
+                            <input
+                                type="checkbox"
+                                checked={activeIndicators.includes(ind.id)}
+                                onChange={(e) => toggleIndicator(ind.id, e.target.checked)}
+                            />
+                            {ind.label}
+                        </label>
+                    ))}
                 </div>
             </div>
 
