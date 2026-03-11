@@ -30,6 +30,9 @@ export function createDynamicIndicatorTemplate(layout: LayoutItem): IndicatorTem
         shortName: layout.id,
         series: 'normal' as IndicatorSeries,
         calcParams: [],
+        figures: layout.valueKey ? [
+            { key: layout.valueKey, type: layout.type === 'bar' ? 'bar' : 'line', baseValue: layout.type === 'bar' ? 0 : undefined }
+        ] : [],
         shouldFormatBigNumber: true,
         // Since backend already calculates, we return original data array object straight mapped
         calc: (dataList: KLineData[]) => {
@@ -63,7 +66,6 @@ export function createDynamicIndicatorTemplate(layout: LayoutItem): IndicatorTem
             kLineDataList,
             visibleRange,
             barSpace,
-            bounding,
             xAxis,
             yAxis,
         }) => {
@@ -74,19 +76,29 @@ export function createDynamicIndicatorTemplate(layout: LayoutItem): IndicatorTem
 
             if (layout.type === 'bar') {
                 const halfBar = Math.floor(barSpace.bar / 2)
+                const zeroY = yAxis.convertToPixel(0)
+
                 for (let i = from; i < to; i++) {
                     const data = kLineDataList[i] as DynamicData
                     if (!data || !layout.valueKey || data[layout.valueKey] === undefined) continue
 
+                    const rawVal = Number(data[layout.valueKey])
+                    if (isNaN(rawVal)) continue
+
                     const x = xAxis.convertToPixel(i)
-                    const y = yAxis.convertToPixel(Number(data[layout.valueKey]))
-                    const y0 = bounding.height + bounding.top // Use pane bounding floor instead of 0 for volume bars
+                    const y = yAxis.convertToPixel(rawVal)
+
+                    const bottomY = zeroY
+
+                    const height = Math.abs(bottomY - y)
+                    const topY = Math.min(bottomY, y)
+
+                    // Provide safety fallback for canvas rendering functions
+                    if (isNaN(x) || isNaN(y) || isNaN(height) || isNaN(topY)) continue
 
                     const color = layout.colorKey ? (data[layout.colorKey] as string || '#9E9E9E') : '#9E9E9E'
                     ctx.fillStyle = color
 
-                    const height = Math.abs(y0 - y)
-                    const topY = Math.min(y0, y)
                     ctx.fillRect(
                         Math.round(x) - halfBar,
                         Math.round(topY),
@@ -111,9 +123,20 @@ export function createDynamicIndicatorTemplate(layout: LayoutItem): IndicatorTem
                         continue
                     }
 
+                    const rawVal = Number(data[layout.valueKey])
+                    if (isNaN(rawVal)) {
+                        isFirst = true
+                        continue
+                    }
+
                     const x = xAxis.convertToPixel(i)
-                    const y = yAxis.convertToPixel(Number(data[layout.valueKey]))
+                    const y = yAxis.convertToPixel(rawVal)
                     const color = layout.colorKey ? (data[layout.colorKey] as string || '#2196F3') : '#2196F3'
+
+                    if (isNaN(x) || isNaN(y)) {
+                        isFirst = true
+                        continue
+                    }
 
                     if (isFirst) {
                         // For the first point with a specific color

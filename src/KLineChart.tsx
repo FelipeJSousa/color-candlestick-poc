@@ -21,7 +21,6 @@ export default function KLineChart() {
     const [periodDays, setPeriodDays] = useState(365)
     const [interval, setInterval] = useState('1d')
     const [useMock, setUseMock] = useState(false)
-    const [lastUpdated, setLastUpdated] = useState<string>('')
     const [activeIndicators, setActiveIndicators] = useState<string[]>(['SM_Volume', 'PEI', 'Trend_Control'])
 
     const loadData = async (chart: Chart, active: string[], currentTicker: string, currentPeriod: number, currentInterval: string, isMock: boolean) => {
@@ -117,8 +116,6 @@ export default function KLineChart() {
 
             // 3. Inject fully dynamic data
             chart.applyNewData(mergedData as KLineData[])
-
-            setLastUpdated(new Date().toLocaleTimeString())
             setStatus('ready')
         } catch (e) {
             console.error('Data fetch or merging error', e)
@@ -238,9 +235,6 @@ export default function KLineChart() {
                             style={{ background: '#1e1e2e', border: '1px solid #333', color: '#fff', padding: '4px 8px', borderRadius: '4px', width: '80px', textTransform: 'uppercase' }}
                             placeholder="Ticker"
                         />
-                        {lastUpdated && (
-                            <span className="last-updated" style={{ fontSize: '11px' }}>Updated {lastUpdated}</span>
-                        )}
                         <label style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#fff', fontSize: '12px', cursor: 'pointer', marginLeft: '10px' }}>
                             <input
                                 type="checkbox"

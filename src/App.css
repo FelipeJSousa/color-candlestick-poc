@@ -129,12 +129,14 @@ h1 .accent {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 24px 32px 32px;
+  padding: 16px 24px;
 }
 
 /* ── Chart card ──────────────────────────────────────────── */
 .card {
+  height: 85vh;
+  display: flex;
+  flex-direction: column;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -143,9 +145,12 @@ h1 .accent {
 }
 
 /* ── Chart wrapper (inside component) ───────────────────── */
+/* ── Chart wrapper (inside component) ───────────────────── */
 .chart-wrapper {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  height: 100%;
 }
 
 .chart-toolbar {
@@ -277,8 +282,9 @@ h1 .accent {
 }
 
 .chart-container {
+  flex: 1;
   width: 100%;
-  height: 520px;
+  min-height: 300px;
 }
 
 /* ── Color legend ────────────────────────────────────────── */
@@ -422,6 +428,6 @@ h1 .accent {
   }
 
   .chart-container {
-    height: 380px;
+    min-height: 380px;
   }
 }
