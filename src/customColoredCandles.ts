@@ -1,7 +1,4 @@
-// Custom KLineCharts v9.8.12 indicator that reads bodyColor / wickColor
-// from each candle object and paints it with those colors.
-
-import type { KLineData, IndicatorTemplate } from 'klinecharts'
+import type { KLineData, IndicatorTemplate, IndicatorSeries } from 'klinecharts'
 
 export interface ApiKLineData extends KLineData {
     bodyColor?: string
@@ -12,10 +9,9 @@ export interface ApiKLineData extends KLineData {
 const customColoredCandles: IndicatorTemplate = {
     name: 'CustomColoredCandles',
     shortName: 'CC',
-    series: 'price',
+    series: 'normal' as unknown as IndicatorSeries,
     calcParams: [],
 
-    // Return an empty object per bar — we don't produce numeric series
     calc: (dataList: KLineData[]) => dataList.map(() => ({})),
 
     draw: ({
@@ -28,8 +24,6 @@ const customColoredCandles: IndicatorTemplate = {
         yAxis,
     }) => {
         const { from, to } = visibleRange
-        // barSpace.bar  = full width of one bar (body)
-        // barSpace.gapBar = gap between bars
         const halfBody = Math.floor(barSpace.bar / 2)
         const wickW = Math.max(1, Math.floor(barSpace.bar * 0.1))
 
@@ -42,7 +36,6 @@ const customColoredCandles: IndicatorTemplate = {
             const k = kLineDataList[i] as ApiKLineData
             if (!k) continue
 
-            // x comes from the xAxis using the data index
             const x = xAxis.convertToPixel(i)
             const openY = yAxis.convertToPixel(k.open)
             const closeY = yAxis.convertToPixel(k.close)
@@ -56,7 +49,7 @@ const customColoredCandles: IndicatorTemplate = {
             const bodyBottom = Math.max(openY, closeY)
             const bodyHeight = Math.max(bodyBottom - bodyTop, 1)
 
-            // ── Upper wick ──────────────────────────────────────────────
+            // Upper wick
             ctx.fillStyle = wickColor
             ctx.fillRect(
                 Math.round(x) - Math.floor(wickW / 2),
@@ -65,7 +58,7 @@ const customColoredCandles: IndicatorTemplate = {
                 Math.round(bodyTop) - Math.round(highY),
             )
 
-            // ── Lower wick ──────────────────────────────────────────────
+            // Lower wick
             ctx.fillRect(
                 Math.round(x) - Math.floor(wickW / 2),
                 Math.round(bodyBottom),
@@ -73,7 +66,7 @@ const customColoredCandles: IndicatorTemplate = {
                 Math.round(lowY) - Math.round(bodyBottom),
             )
 
-            // ── Body ────────────────────────────────────────────────────
+            // Body
             ctx.fillStyle = bodyColor
             ctx.fillRect(
                 Math.round(x) - halfBody,

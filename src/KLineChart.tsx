@@ -1,31 +1,113 @@
 import { useEffect, useRef, useState } from 'react'
 import { init, dispose, registerIndicator } from 'klinecharts'
-import type { Chart } from 'klinecharts'
+import type { Chart, KLineData } from 'klinecharts'
 import customColoredCandles from './customColoredCandles'
-import { fetchCandles } from './mockData'
+import { fetchOHLC, fetchSMVolume, fetchPEI, fetchTrendControl } from './mockData'
+import type { LayoutItem, IndicatorResponse } from './dynamicIndicators'
+import { createDynamicIndicatorTemplate } from './dynamicIndicators'
 
 type Status = 'loading' | 'ready' | 'error'
 
-// Register once at module level — safe to call multiple times with the same name
+// Register OHLC custom indicator once
 registerIndicator(customColoredCandles)
 
 export default function KLineChart() {
     const containerRef = useRef<HTMLDivElement>(null)
     const chartRef = useRef<Chart | null>(null)
+    const addedIndicatorsRef = useRef<{ paneId: string, name: string }[]>([])
     const [status, setStatus] = useState<Status>('loading')
     const [candleCount, setCandleCount] = useState(120)
     const [lastUpdated, setLastUpdated] = useState<string>('')
+    const [activeIndicators, setActiveIndicators] = useState<string[]>(['SM_Volume', 'PEI', 'Trend_Control'])
 
-    const loadData = async (chart: Chart, count: number) => {
+    const loadData = async (chart: Chart, count: number, active: string[]) => {
         setStatus('loading')
         try {
-            const data = await fetchCandles(count)
-            // v9 API: applyNewData(dataList, more?)
-            chart.applyNewData(data as never[])
+            // 1. Fetch decoupled APIs in parallel logically
+            const promises: Promise<IndicatorResponse>[] = [fetchOHLC(count)]
+            if (active.includes('SM_Volume')) promises.push(fetchSMVolume(count))
+            if (active.includes('PEI')) promises.push(fetchPEI(count))
+            if (active.includes('Trend_Control')) promises.push(fetchTrendControl(count))
+
+            const responses = await Promise.all(promises)
+
+            // Combine layouts into a single registry definition dictionary
+            const allLayouts: LayoutItem[] = responses.flatMap(r => r.layout)
+
+            // Register dynamic templates from backend config into KLineCharts
+            allLayouts.forEach(layout => {
+                if (layout.type !== 'ohlc') {
+                    const template = createDynamicIndicatorTemplate(layout)
+                    registerIndicator(template)
+                }
+            })
+
+            // Clean previously added dynamic panes
+            addedIndicatorsRef.current.forEach(({ paneId, name }) => {
+                chart.removeIndicator(paneId, name)
+            })
+            addedIndicatorsRef.current = []
+
+            // Setup Panes properly
+            // Clear existing panes if needed or ensure they map correctly
+            chart.createIndicator('CustomColoredCandles', false, { id: 'candle_pane' })
+
+            // Re-map the indicators based on backend instructions
+            const createdPanes = new Set<string>(['candle_pane', 'main'])
+
+            allLayouts.forEach(layout => {
+                const paneId = layout.pane === 'main' ? 'candle_pane' : layout.pane
+
+                // createIndicator syntax: createIndicator(indicatorName, isStack, paneOptions)
+                if (layout.type !== 'ohlc') {
+                    if (!createdPanes.has(paneId)) {
+                        chart.createIndicator(layout.id, false, { id: paneId })
+                        createdPanes.add(paneId)
+                    } else {
+                        // Stack indicators if pane already exists (like PEI Dashed + PEI Bar on sub_pane_2)
+                        chart.createIndicator(layout.id, true, { id: paneId })
+                    }
+                    addedIndicatorsRef.current.push({ paneId, name: layout.id })
+                }
+            })
+
+            // 2. Merge all data efficiently by timestamp
+            // Maps timestamp -> unified object
+            const dataMap = new Map<number, Record<string, unknown>>()
+
+            for (const dataset of responses) {
+                for (const item of dataset.data as Record<string, unknown>[]) {
+                    const ts = item.timestamp as number
+                    const existing = dataMap.get(ts) || {}
+                    dataMap.set(ts, { ...existing, ...item })
+                }
+            }
+
+            const ohlcLayouts = allLayouts.filter(l => l.type === 'ohlc')
+
+            // Convert map back to sorted array and map dynamic colorKeys for OHLC natively
+            const mergedData = Array.from(dataMap.values()).sort((a, b) => (a.timestamp as number) - (b.timestamp as number)).map(item => {
+                const mappedItem = { ...item }
+                ohlcLayouts.forEach(layout => {
+                    if (layout.colorKeys) {
+                        if (mappedItem[layout.colorKeys.body]) {
+                            mappedItem.bodyColor = mappedItem[layout.colorKeys.body]
+                        }
+                        if (mappedItem[layout.colorKeys.wick]) {
+                            mappedItem.wickColor = mappedItem[layout.colorKeys.wick]
+                        }
+                    }
+                })
+                return mappedItem
+            })
+
+            // 3. Inject fully dynamic data
+            chart.applyNewData(mergedData as KLineData[])
+
             setLastUpdated(new Date().toLocaleTimeString())
             setStatus('ready')
         } catch (e) {
-            console.error('fetchCandles error', e)
+            console.error('Data fetch or merging error', e)
             setStatus('error')
         }
     }
@@ -41,8 +123,8 @@ export default function KLineChart() {
                     vertical: { color: 'rgba(255,255,255,0.04)' },
                 },
                 candle: {
-                    // Hide the built-in candle renderer — our indicator takes over
-                    type: 'candle_solid',
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    type: 'candle_solid' as any,
                     bar: {
                         upColor: 'transparent',
                         downColor: 'transparent',
@@ -89,33 +171,37 @@ export default function KLineChart() {
             },
         })
 
+        if (!chart) return
         chartRef.current = chart
 
-        // Create custom indicator on the main candle pane
-        chart.createIndicator('CustomColoredCandles', false, { id: 'candle_pane' })
-        // Volume in a sub-pane
-        chart.createIndicator('VOL')
-
-        loadData(chart, 120)
+        loadData(chart, 120, ['SM_Volume', 'PEI', 'Trend_Control'])
 
         const handleResize = () => chart.resize()
         window.addEventListener('resize', handleResize)
 
         return () => {
             window.removeEventListener('resize', handleResize)
-            if (containerRef.current) dispose(containerRef.current)
+            // Save ref to variable as React suggests for cleanup
+            const currentContainer = containerRef.current
+            if (currentContainer) dispose(currentContainer)
             chartRef.current = null
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+
     }, [])
 
     const handleRefresh = () => {
-        if (chartRef.current) loadData(chartRef.current, candleCount)
+        if (chartRef.current) loadData(chartRef.current, candleCount, activeIndicators)
     }
 
     const handleCountChange = (count: number) => {
         setCandleCount(count)
-        if (chartRef.current) loadData(chartRef.current, count)
+        if (chartRef.current) loadData(chartRef.current, count, activeIndicators)
+    }
+
+    const toggleIndicator = (id: string, checked: boolean) => {
+        const next = checked ? [...activeIndicators, id] : activeIndicators.filter(x => x !== id)
+        setActiveIndicators(next)
+        if (chartRef.current) loadData(chartRef.current, candleCount, next)
     }
 
     return (
@@ -132,6 +218,20 @@ export default function KLineChart() {
                         <span className="last-updated">Updated {lastUpdated}</span>
                     )}
                 </div>
+
+                <div className="toolbar-indicators" style={{ display: 'flex', gap: '15px', alignItems: 'center', marginLeft: '20px' }}>
+                    {[{ id: 'SM_Volume', label: 'SM Volume' }, { id: 'PEI', label: 'PEI' }, { id: 'Trend_Control', label: 'Trend Control' }].map(ind => (
+                        <label key={ind.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#fff', fontSize: '13px', cursor: 'pointer' }}>
+                            <input
+                                type="checkbox"
+                                checked={activeIndicators.includes(ind.id)}
+                                onChange={(e) => toggleIndicator(ind.id, e.target.checked)}
+                            />
+                            {ind.label}
+                        </label>
+                    ))}
+                </div>
+
                 <div className="toolbar-right">
                     {[60, 120, 200].map(n => (
                         <button
@@ -162,24 +262,6 @@ export default function KLineChart() {
 
             {/* Canvas */}
             <div className="chart-container" ref={containerRef} />
-
-            {/* Color legend */}
-            <div className="color-legend">
-                {[
-                    { color: '#00E676', label: 'Strong Bullish' },
-                    { color: '#4CAF50', label: 'Bullish' },
-                    { color: '#9E9E9E', label: 'Neutral' },
-                    { color: '#FF5252', label: 'Bearish' },
-                    { color: '#B71C1C', label: 'Strong Bearish' },
-                    { color: '#FF9800', label: 'Alert' },
-                    { color: '#7C4DFF', label: 'Signal' },
-                ].map(item => (
-                    <div key={item.label} className="legend-item">
-                        <span className="legend-dot" style={{ background: item.color }} />
-                        <span className="legend-text">{item.label}</span>
-                    </div>
-                ))}
-            </div>
         </div>
     )
 }
